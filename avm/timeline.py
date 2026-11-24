@@ -86,6 +86,8 @@ def resolve_voices(
     """フレームごとの音声ファイルを決める（VOICEVOX ならここで合成）。"""
     voices: dict[int, str] = {}
     warnings: list[str] = []
+    if project.voice_mode == "none":
+        return voices, warnings
     text_scenes = [s for s in parsed.scenes if s.text]
 
     # 明示指定 [音声:xxx]

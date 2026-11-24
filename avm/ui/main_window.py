@@ -257,6 +257,8 @@ class MainWindow(QMainWindow):
         mk("まとめて保存", self.save_all, "Ctrl+Shift+S")
         mk("ZIPにまとめる…", self.export_zip, toolbar=False)
         fm.addSeparator()
+        mk("サンプルを開く", self.open_sample, toolbar=False)
+        fm.addSeparator()
         mk("プロジェクトのフォルダを開く", lambda: self.project and open_folder(self.project.folder), toolbar=False)
         fm.addSeparator()
         mk("終了", self.close, toolbar=False)
@@ -326,13 +328,17 @@ class MainWindow(QMainWindow):
         f = QFormLayout(g)
         self.mode_vv = QRadioButton("VOICEVOX で台本を読み上げる")
         self.mode_files = QRadioButton("用意した音声ファイルを使う（ボイスフォルダ）")
+        self.mode_none = QRadioButton("声なし（BGM・SE・字幕だけ）")
         bg = QButtonGroup(self)
         bg.addButton(self.mode_vv)
         bg.addButton(self.mode_files)
+        bg.addButton(self.mode_none)
+        self.mode_none.toggled.connect(lambda v: v and self.set_prop("voice_mode", "none"))
         self.mode_vv.toggled.connect(lambda v: v and self.set_prop("voice_mode", "voicevox"))
         self.mode_files.toggled.connect(lambda v: v and self.set_prop("voice_mode", "files"))
         f.addRow(self.mode_vv)
         f.addRow(self.mode_files)
+        f.addRow(self.mode_none)
         self.vv_url = QLineEdit()
         self.vv_url.editingFinished.connect(lambda: self.set_prop("voicevox_url", self.vv_url.text().strip()))
         f.addRow("VOICEVOX の URL", self.vv_url)
@@ -600,6 +606,11 @@ class MainWindow(QMainWindow):
                 return
             except Exception as e:  # noqa: BLE001
                 QMessageBox.warning(self, APP_NAME, f"前回のプロジェクトを開けませんでした。\n{e}")
+        if os.path.isdir(media.resource_path("サンプル")):
+            r = QMessageBox.question(self, APP_NAME, "ようこそ！まずはサンプルを開いてみますか？\n"
+                                                     "（いいえ = 新しいプロジェクトを作る）")
+            if r == QMessageBox.Yes and self.open_sample():
+                return
         if not self.new_project():
             p = Project.create(os.path.join(default_root(), "プロジェクト1"))
             if os.path.exists(os.path.join(p.folder, PROJECT_FILE)):
@@ -630,6 +641,27 @@ class MainWindow(QMainWindow):
         p.set_aspect(d.aspect.currentText())
         p.save()
         self.set_project(p)
+        return True
+
+    def open_sample(self) -> bool:
+        """同梱のサンプルを「ドキュメント/自動動画メーカー」にコピーして開く。"""
+        if not self.maybe_save():
+            return False
+        src = media.resource_path("サンプル")
+        if not os.path.isdir(src):
+            QMessageBox.warning(self, APP_NAME, "サンプルが見つかりません。")
+            return False
+        dst = os.path.join(default_root(), "サンプル")
+        i = 2
+        while os.path.exists(dst):
+            dst = os.path.join(default_root(), f"サンプル{i}")
+            i += 1
+        shutil.copytree(src, dst)
+        p = Project.load(os.path.join(dst, PROJECT_FILE))
+        p.name = os.path.basename(dst)
+        p.save()
+        self.set_project(p)
+        self.statusBar().showMessage(f"サンプルをコピーして開きました: {dst}", 8000)
         return True
 
     def open_project(self):
@@ -669,7 +701,7 @@ class MainWindow(QMainWindow):
             self.sub_color.set_color(p.subtitle_color)
             self.sub_outline.set_color(p.subtitle_outline)
             self.sub_box.setChecked(p.subtitle_box)
-            (self.mode_vv if p.voice_mode == "voicevox" else self.mode_files).setChecked(True)
+            {"voicevox": self.mode_vv, "files": self.mode_files}.get(p.voice_mode, self.mode_none).setChecked(True)
             self.vv_url.setText(p.voicevox_url)
             self.speed_sp.setValue(p.speed)
             self.gap_sp.setValue(p.scene_gap)

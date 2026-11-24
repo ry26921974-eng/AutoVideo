@@ -81,7 +81,7 @@ class Project:
     subtitle_outline: str = "#000000"
     subtitle_box: bool = True
     # 音声
-    voice_mode: str = "voicevox"  # voicevox / files
+    voice_mode: str = "voicevox"  # voicevox / files / none
     voicevox_url: str = "http://127.0.0.1:50021"
     default_speaker: int = 3
     speed: float = 1.0

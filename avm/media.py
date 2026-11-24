@@ -21,6 +21,15 @@ def app_dir() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def resource_path(*parts: str) -> str:
+    """同梱ファイル（サンプルなど）の場所。"""
+    base = getattr(sys, "_MEIPASS", None) or app_dir()
+    p = os.path.join(base, *parts)
+    if not os.path.exists(p):
+        p = os.path.join(app_dir(), *parts)
+    return p
+
+
 def ffmpeg_exe() -> str:
     """FFmpeg の場所を探す。"""
     global _FFMPEG

@@ -3,6 +3,7 @@
 from PyInstaller.utils.hooks import collect_data_files
 
 datas = collect_data_files("imageio_ffmpeg")  # FFmpeg 本体を同梱
+datas += [("サンプル", "サンプル")]  # サンプルプロジェクト
 
 a = Analysis(
     ["main.py"],
