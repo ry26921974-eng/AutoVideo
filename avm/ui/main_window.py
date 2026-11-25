@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import APP_NAME, APP_VERSION, media
-from ..model import (ASPECTS, AUDIO_EXTS, IMAGE_EXTS, PROJECT_FILE, VIDEO_EXTS, Item, Project,
+from ..model import (ASPECTS, AUDIO_EXTS, IMAGE_EXTS, MOTIONS, PROJECT_FILE, VIDEO_EXTS, Item, Project,
                      list_files)
 from ..script import (Command, ParsedScript, Scene, format_command, insert_command, remove_command,
                       remove_item_commands, rename_in_script, visible_at)
@@ -26,7 +26,7 @@ from ..timeline import parse_project
 from ..voicevox import Voicevox, VoicevoxError
 from .canvas import ASSET_MIME_PREFIX, CanvasView, _thumb_cache
 from .preview import PreviewWindow, RenderWorker, open_folder
-from .script_editor import ScriptEdit
+from .script_editor import ScriptEdit, ask_change
 
 AUTOSAVE_FILE = "project.autosave.avmproj"
 KIND_NAMES = {"image": "画像", "video": "動画", "character": "立ち絵"}
@@ -481,6 +481,40 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.ok_btn)
         bar.addWidget(self.unlock_btn)
         ml.addLayout(bar)
+        bar2 = QHBoxLayout()
+        self.fx_alpha = QSpinBox()
+        self.fx_alpha.setRange(0, 100)
+        self.fx_alpha.setSuffix(" %")
+        self.fx_alpha.setToolTip("0% = そのまま、100% = 見えない")
+        self.fx_enter = QComboBox()
+        self.fx_exit = QComboBox()
+        for key, label in MOTIONS.items():
+            self.fx_enter.addItem(label, key)
+            self.fx_exit.addItem({"left": "左へ", "right": "右へ", "top": "上へ", "bottom": "下へ"}.get(key, label), key)
+        self.fx_enter_dur = QDoubleSpinBox()
+        self.fx_exit_dur = QDoubleSpinBox()
+        for dsp in (self.fx_enter_dur, self.fx_exit_dur):
+            dsp.setRange(0.1, 10)
+            dsp.setSingleStep(0.1)
+            dsp.setSuffix(" 秒")
+        bar2.addWidget(QLabel("透明度"))
+        bar2.addWidget(self.fx_alpha)
+        bar2.addSpacing(12)
+        bar2.addWidget(QLabel("登場"))
+        bar2.addWidget(self.fx_enter)
+        bar2.addWidget(self.fx_enter_dur)
+        bar2.addSpacing(12)
+        bar2.addWidget(QLabel("退場"))
+        bar2.addWidget(self.fx_exit)
+        bar2.addWidget(self.fx_exit_dur)
+        bar2.addStretch(1)
+        self.fx_alpha.valueChanged.connect(self.on_fx_edit)
+        self.fx_enter.currentIndexChanged.connect(self.on_fx_edit)
+        self.fx_exit.currentIndexChanged.connect(self.on_fx_edit)
+        self.fx_enter_dur.valueChanged.connect(self.on_fx_edit)
+        self.fx_exit_dur.valueChanged.connect(self.on_fx_edit)
+        self.fx_widgets = [self.fx_alpha, self.fx_enter, self.fx_exit, self.fx_enter_dur, self.fx_exit_dur]
+        ml.addLayout(bar2)
         ml.addWidget(QLabel("ヒント：配置したらOKで固定。固定した素材をクリックすると「解除」で動かせます。"
                             "右クリックで前面・背面、消去などができます。"))
         sp.addWidget(mid)
@@ -502,6 +536,14 @@ class MainWindow(QMainWindow):
         row.addWidget(b)
         b = QPushButton("このフレームで消去")
         b.clicked.connect(lambda: self.hide_at_frame(self.tree_name()))
+        row.addWidget(b)
+        rl.addLayout(row)
+        row = QHBoxLayout()
+        b = QPushButton("このフレームで大きさを変える…")
+        b.clicked.connect(lambda: self.change_at_frame("scale", self.tree_name()))
+        row.addWidget(b)
+        b = QPushButton("このフレームで透明度を変える…")
+        b.clicked.connect(lambda: self.change_at_frame("alpha", self.tree_name()))
         row.addWidget(b)
         rl.addLayout(row)
         b = QPushButton("素材を削除（プロジェクトから）")
@@ -889,8 +931,8 @@ class MainWindow(QMainWindow):
         names = {it.name for it in self.project.items}
         for sc in self.parsed.scenes:
             for c in sc.commands:
-                if c.kind in ("show", "hide") and c.arg not in names:
-                    errs.append(f"{c.line_no + 1}行目: 素材「{c.arg}」がありません")
+                if c.kind in ("show", "hide", "scale", "alpha") and c.name not in names:
+                    errs.append(f"{c.line_no + 1}行目: 素材「{c.name}」がありません")
         if self.parsed.trailing:
             errs.append("最後のセリフより後ろの命令は使われません")
         self.err_label.setText("\n".join(errs[:8]))
@@ -1021,6 +1063,17 @@ class MainWindow(QMainWindow):
         self.unlock_btn.setEnabled(bool(it and it.locked))
         for s in self.geo.values():
             s.setEnabled(bool(it and not it.locked))
+        for wdg in self.fx_widgets:
+            wdg.setEnabled(bool(it))
+            wdg.blockSignals(True)
+        if it:
+            self.fx_alpha.setValue(int(round((1 - it.opacity) * 100)))
+            self.fx_enter.setCurrentIndex(max(0, self.fx_enter.findData(it.enter)))
+            self.fx_exit.setCurrentIndex(max(0, self.fx_exit.findData(it.exit)))
+            self.fx_enter_dur.setValue(it.enter_dur)
+            self.fx_exit_dur.setValue(it.exit_dur)
+        for wdg in self.fx_widgets:
+            wdg.blockSignals(False)
         if it:
             self.sel_label.setText(f"選択中: {it.name}（{'固定' if it.locked else '未固定 - 動かしてOK'}）")
             for k, s in self.geo.items():
@@ -1032,6 +1085,30 @@ class MainWindow(QMainWindow):
                     self.item_tree.setCurrentItem(self.item_tree.topLevelItem(i))
         else:
             self.sel_label.setText("素材を選んでください")
+
+    def on_fx_edit(self, *_):
+        name = self.canvas.selected_name() or self.tree_name()
+        it = self.project.item(name) if (self.project and name) else None
+        if not it:
+            return
+        it.opacity = 1 - self.fx_alpha.value() / 100
+        it.enter = self.fx_enter.currentData()
+        it.exit = self.fx_exit.currentData()
+        it.enter_dur = float(self.fx_enter_dur.value())
+        it.exit_dur = float(self.fx_exit_dur.value())
+        self.mark_dirty()
+        if name in self.canvas.gfx:
+            self.canvas.gfx[name].setOpacity(max(0.15, it.opacity))
+
+    def change_at_frame(self, kind: str, name: str):
+        if not name or not self.project or not self.scene():
+            return
+        if name not in visible_at(self.parsed, self.current_frame):
+            QMessageBox.information(self, APP_NAME, f"「{name}」はこのフレームで表示されていません。先に表示してください。")
+            return
+        cmd = ask_change(self, kind, name)
+        if cmd:
+            self.add_cmd(cmd)
 
     def on_geo_edit(self):
         name = self.canvas.selected_name()
@@ -1083,6 +1160,8 @@ class MainWindow(QMainWindow):
             m.addAction("OK（この場所で固定）", lambda: self.lock_item(name))
         m.addSeparator()
         m.addAction("このフレームで消去", lambda: self.hide_at_frame(name))
+        m.addAction("このフレームで大きさを変える…", lambda: self.change_at_frame("scale", name))
+        m.addAction("このフレームで透明度を変える…", lambda: self.change_at_frame("alpha", name))
         m.addAction("最前面へ", lambda: self.set_z(name, max((i.z for i in self.project.items), default=0) + 1))
         m.addAction("最背面へ", lambda: self.set_z(name, min((i.z for i in self.project.items), default=0) - 1))
         m.addAction("元の縦横比に戻す", lambda: self.reset_ratio(name))
@@ -1124,7 +1203,7 @@ class MainWindow(QMainWindow):
         if not sc:
             return None
         for c in sc.commands:
-            if c.kind == kind and c.arg == name:
+            if c.kind == kind and c.name == name:
                 return c
         return None
 
@@ -1485,10 +1564,15 @@ HELP_TEXT = """【基本】1行 = 1フレーム（1場面）です。
   [SE:ファイル名]   効果音を1回鳴らす
   [音声:ファイル名] この行の音声ファイルを指定（用意した音声モード）
   [秒数:3]        この行の長さを指定／単独の行ならセリフなしで3秒待つ
+  [画像:名前,左から,0.5秒]  動きを付けて表示（左から/右から/上から/下から/フェード/ズーム）
+  [消去:名前,右へ]   動きを付けて消す（左へ/右へ/上へ/下へ/フェード/ズーム）
+  [大きさ:名前,150%,1秒]  1秒かけて元の150%の大きさに（中心を基準）
+  [透明度:名前,50%,1秒]   1秒かけて透明度50%に（0%=そのまま、100%=見えない）
 
 【操作】
 ・右クリック：切り取り／コピー／貼り付け、命令の挿入
 ・②配置：素材をキャンバスへドラッグ → 位置を決めて OK → 固定
          固定した素材をクリック → 解除 で再配置
+         キャンバスの下で、素材ごとの透明度・登場/退場の動きを設定
 ・F5：プレビュー　Ctrl+E：書き出し（プロジェクトフォルダに保存）
 """

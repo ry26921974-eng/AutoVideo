@@ -72,3 +72,30 @@ def test_timeline_duration_and_intervals(tmp_path):
     pr.duration = 30
     tl = build_timeline(pr, parse_project(pr), {})
     assert tl.total == 30 and tl.scenes[-1].end == 30
+
+
+def test_effect_commands(tmp_path):
+    from avm.renderer import motion_state, seg_value
+
+    pr = Project.create(str(tmp_path / "e"))
+    pr.items = [Item("ねこ", "image", x=100, y=100, w=200, h=200, opacity=0.8, exit="fade", exit_dur=1.0)]
+    pr.script = ("[画像:ねこ,左から,1秒]\nいち\n[大きさ:ねこ,150%,2秒][透明度:ねこ,50%]\nに\n"
+                 "[消去:ねこ]\nさん\n")
+    tl = build_timeline(pr, parse_project(pr), {})
+    v = tl.visibles[0]
+    assert v.enter == "left" and v.enter_dur == 1.0
+    assert v.exit == "fade" and abs(v.end - (tl.scenes[2].start + 1.0)) < 1e-6
+    t1 = tl.scenes[1].start
+    assert v.scale_segs == [(t1, t1 + 2.0, 1.0, 1.5)]
+    assert v.alpha_segs[0][2:] == (0.8, 0.5)
+    assert seg_value(v.scale_segs, 1.0, t1 + 5) == 1.5
+    assert seg_value(v.scale_segs, 1.0, 0) == 1.0
+    dx, *_ = motion_state(v, 0.0, 1920, 1080, 100, 100, 200, 200)
+    assert dx == -300  # 画面の左外から
+    dx, *_ = motion_state(v, 1.0, 1920, 1080, 100, 100, 200, 200)
+    assert dx == 0
+
+
+def test_rename_keeps_options():
+    s = rename_in_script("[画像:ねこ,右から]\n[大きさ:ねこ,120%]\nあ\n", "ねこ", "猫")
+    assert "[画像:猫,右から]" in s and "[大きさ:猫,120%]" in s

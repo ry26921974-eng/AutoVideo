@@ -74,6 +74,51 @@ def draw_subtitle(p: QPainter, text: str, W: int, H: int, project: Project) -> N
     p.restore()
 
 
+def ease_out(x: float) -> float:
+    x = min(1.0, max(0.0, x))
+    return 1 - (1 - x) ** 3
+
+
+def seg_value(segs, base: float, t: float) -> float:
+    v = base
+    for t0, t1, a, b in segs:
+        if t < t0:
+            break
+        if t >= t1 or t1 <= t0:
+            v = b
+        else:
+            v = a + (b - a) * ease_out((t - t0) / (t1 - t0))
+            break
+    return v
+
+
+def motion_state(v, t: float, W: float, H: float, x: float, y: float, w: float, h: float):
+    """登場・退場の動き → (dx, dy, 拡大率, 不透明度の倍率)。"""
+    dx = dy = 0.0
+    sc = al = 1.0
+    phases = []
+    if v.enter != "none" and v.enter_dur > 0 and t < v.start + v.enter_dur:
+        phases.append((v.enter, 1 - ease_out((t - v.start) / v.enter_dur)))
+    if v.exit != "none" and v.exit_dur > 0 and t > v.end - v.exit_dur:
+        k = (t - (v.end - v.exit_dur)) / v.exit_dur
+        phases.append((v.exit, min(1.0, max(0.0, k)) ** 2))
+    for kind, k in phases:  # k: 0 = 定位置, 1 = 画面の外
+        if kind == "left":
+            dx += -(x + w) * k
+        elif kind == "right":
+            dx += (W - x) * k
+        elif kind == "top":
+            dy += -(y + h) * k
+        elif kind == "bottom":
+            dy += (H - y) * k
+        elif kind == "fade":
+            al *= 1 - k
+        elif kind == "zoom":
+            sc *= 1 - k
+            al *= 1 - k * 0.5
+    return dx, dy, sc, al
+
+
 class FrameRenderer:
     def __init__(self, project: Project, tl: Timeline, scale: float = 1.0):
         self.project = project
@@ -126,6 +171,18 @@ class FrameRenderer:
             it = v.item
             x, y = int(round(it.x * s)), int(round(it.y * s))
             w, h = max(2, int(round(it.w * s))), max(2, int(round(it.h * s)))
+            scale = seg_value(v.scale_segs, 1.0, t)
+            alpha = seg_value(v.alpha_segs, it.opacity, t)
+            dx, dy, msc, mal = motion_state(v, t, self.W, self.H, x, y, w, h)
+            scale *= msc
+            alpha *= mal
+            if alpha <= 0.001 or scale <= 0.001:
+                if it.kind == "video":  # 見えなくても再生位置は進める
+                    rd = self._videos.get(vi)
+                    if rd is not None:
+                        rd.frame(int(round((t - v.start) * self.tl.fps)))
+                continue
+            im = None
             if it.kind == "video":
                 rd = self._videos.get(vi)
                 if rd is None:
@@ -134,13 +191,22 @@ class FrameRenderer:
                 local = int(round((t - v.start) * self.tl.fps))
                 data = rd.frame(local)
                 if data:
-                    fr = QImage(data, rd.w, rd.h, rd.w * 4, QImage.Format_RGBA8888)
-                    p.drawImage(x, y, fr)
+                    im = QImage(data, rd.w, rd.h, rd.w * 4, QImage.Format_RGBA8888)
             else:
                 path = self._char_file(it, fi) if it.kind == "character" else it.file
-                im = self._image(self.project.abspath(path), w, h)
-                if im is not None:
-                    p.drawImage(x, y, im)
+                ms = max([1.0] + [b for *_, b in v.scale_segs])  # 拡大してもぼやけないように
+                im = self._image(self.project.abspath(path), int(round(w * ms)), int(round(h * ms)))
+            if im is None:
+                continue
+            if abs(scale - 1) < 1e-4 and alpha >= 0.999 and im.width() == w:
+                p.drawImage(int(round(x + dx)), int(round(y + dy)), im)
+            else:
+                p.save()
+                p.setOpacity(alpha)
+                p.translate(x + dx + w / 2, y + dy + h / 2)
+                p.scale(scale, scale)
+                p.drawImage(QRectF(-w / 2, -h / 2, w, h), im)
+                p.restore()
         if self.project.subtitles:
             for text, st, en in self.tl.subtitles:
                 if st <= t < en:

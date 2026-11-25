@@ -120,6 +120,7 @@ class ItemGfx(QGraphicsObject):
         self.pixmap = item_pixmap(project, item)
         self.setPos(item.x, item.y)
         self.setZValue(item.z)
+        self.setOpacity(max(0.15, item.opacity))
         self.ok = OkButton(self)
         self.handle = ResizeHandle(self)
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)

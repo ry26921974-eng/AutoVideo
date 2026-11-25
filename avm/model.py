@@ -21,6 +21,17 @@ FOLDERS = {
     "character": "立ち絵",
 }
 
+# 登場・退場の動き
+MOTIONS = {
+    "none": "なし",
+    "left": "左から",
+    "right": "右から",
+    "top": "上から",
+    "bottom": "下から",
+    "fade": "フェード",
+    "zoom": "ズーム",
+}
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".wmv", ".m4v"}
 AUDIO_EXTS = {".wav", ".mp3", ".ogg", ".m4a", ".flac", ".aac", ".wma"}
@@ -49,6 +60,12 @@ class Item:
     h: float = 300.0
     locked: bool = False
     z: int = 0
+    # 見た目・動き
+    opacity: float = 1.0  # 1 = そのまま, 0 = 見えない
+    enter: str = "none"  # none / left / right / top / bottom / fade / zoom
+    enter_dur: float = 0.5
+    exit: str = "none"
+    exit_dur: float = 0.5
     # 動画用
     loop: bool = True
     use_audio: bool = False

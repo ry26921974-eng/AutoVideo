@@ -6,9 +6,43 @@ from typing import Callable
 from PySide6.QtCore import QRect, QSize, Qt, Signal
 from PySide6.QtGui import (QAction, QColor, QFont, QPainter, QSyntaxHighlighter, QTextCharFormat,
                            QTextCursor)
-from PySide6.QtWidgets import QInputDialog, QMenu, QPlainTextEdit, QWidget
+from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QInputDialog, QLabel,
+                               QMenu, QPlainTextEdit, QSpinBox, QWidget)
 
-from ..script import CMD_RE, format_command
+from ..script import CMD_RE, MOTION_IN, MOTION_OUT, format_command
+
+
+def ask_change(parent, kind: str, name: str) -> str | None:
+    """大きさ／透明度の変更命令を作るダイアログ。"""
+    d = QDialog(parent)
+    d.setWindowTitle("大きさを変える" if kind == "scale" else "透明度を変える")
+    f = QFormLayout(d)
+    val = QSpinBox()
+    if kind == "scale":
+        val.setRange(1, 1000)
+        val.setValue(150)
+        f.addRow(QLabel(f"「{name}」の大きさを、元の大きさの何％にしますか？"))
+        f.addRow("大きさ", val)
+    else:
+        val.setRange(0, 100)
+        val.setValue(50)
+        f.addRow(QLabel(f"「{name}」の透明度（0% = そのまま、100% = 見えない）"))
+        f.addRow("透明度", val)
+    val.setSuffix(" %")
+    dur = QDoubleSpinBox()
+    dur.setRange(0, 60)
+    dur.setSingleStep(0.1)
+    dur.setValue(1.0)
+    dur.setSuffix(" 秒かけて")
+    dur.setSpecialValueText("すぐに")
+    f.addRow("変化の時間", dur)
+    bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    bb.accepted.connect(d.accept)
+    bb.rejected.connect(d.reject)
+    f.addRow(bb)
+    if d.exec() != QDialog.Accepted:
+        return None
+    return format_command(kind, f"{name},{val.value()}%,{dur.value():g}秒")
 
 
 class Highlighter(QSyntaxHighlighter):
@@ -168,12 +202,25 @@ class ScriptEdit(QPlainTextEdit):
         items, bgms, ses, voices = self.provider()
         sub = m.addMenu("この行で画像・動画を表示")
         for n in items:
-            sub.addAction(n, lambda n=n: self.insert_command_line(format_command("show", n)))
+            s2 = sub.addMenu(n)
+            for key, label in MOTION_IN.items():
+                arg = n if key == "none" else f"{n},{label}"
+                s2.addAction("そのまま（素材の設定どおり）" if key == "none" else label + "入れる",
+                             lambda a=arg: self.insert_command_line(format_command("show", a)))
         sub.setEnabled(bool(items))
         sub = m.addMenu("この行で画像・動画を消去")
         for n in items:
-            sub.addAction(n, lambda n=n: self.insert_command_line(format_command("hide", n)))
+            s2 = sub.addMenu(n)
+            for key, label in MOTION_OUT.items():
+                arg = n if key == "none" else f"{n},{label}"
+                s2.addAction("そのまま（素材の設定どおり）" if key == "none" else label + "消す",
+                             lambda a=arg: self.insert_command_line(format_command("hide", a)))
         sub.setEnabled(bool(items))
+        for kind, title in (("scale", "この行で大きさを変える"), ("alpha", "この行で透明度を変える")):
+            sub = m.addMenu(title)
+            for n in items:
+                sub.addAction(n, lambda n=n, k=kind: self._ask_change(k, n))
+            sub.setEnabled(bool(items))
         act("この行ですべて消去", lambda: self.insert_command_line(format_command("hideall")))
         m.addSeparator()
         sub = m.addMenu("この行でBGM開始")
@@ -192,6 +239,11 @@ class ScriptEdit(QPlainTextEdit):
         act("この行の秒数を指定…", self._ask_duration)
         act("セリフなしの待ち時間を入れる…", self._ask_wait)
         m.exec(e.globalPos())
+
+    def _ask_change(self, kind: str, name: str) -> None:
+        cmd = ask_change(self, kind, name)
+        if cmd:
+            self.insert_command_line(cmd)
 
     def _append_to_line(self, cmd: str) -> None:
         c = self.textCursor()

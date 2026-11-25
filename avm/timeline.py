@@ -35,6 +35,24 @@ class Visible:
     item: Item
     start: float
     end: float
+    enter: str = "none"
+    enter_dur: float = 0.0
+    exit: str = "none"
+    exit_dur: float = 0.0
+    # (開始, 終了, 前の値, 次の値) の並び
+    scale_segs: list[tuple[float, float, float, float]] = field(default_factory=list)
+    alpha_segs: list[tuple[float, float, float, float]] = field(default_factory=list)
+
+
+@dataclass
+class _Open:
+    start: float
+    enter: str
+    enter_dur: float
+    scale: float = 1.0
+    alpha: float = 1.0
+    scale_segs: list = field(default_factory=list)
+    alpha_segs: list = field(default_factory=list)
 
 
 @dataclass
@@ -163,15 +181,24 @@ def build_timeline(project: Project, parsed: ParsedScript, voices: dict[int, str
     if tl.scenes and tl.scenes[-1].end < total:
         tl.scenes[-1].end = total
 
-    open_items: dict[str, float] = {}
+    open_items: dict[str, _Open] = {}
     order: list[str] = []
     bgm: tuple[str, float] | None = None
 
-    def close_item(name: str, at: float) -> None:
+    def close_item(name: str, at: float, exit_motion: str | None = None, exit_dur: float | None = None,
+                   final: bool = False) -> None:
         st = open_items.pop(name, None)
         it = project.item(name)
-        if st is not None and it is not None and at > st:
-            tl.visibles.append(Visible(copy.copy(it), st, at))
+        if st is None or it is None:
+            return
+        ex = exit_motion if exit_motion is not None else it.exit
+        exd = exit_dur if exit_dur is not None else it.exit_dur
+        if final or ex == "none":
+            ex, exd = "none", 0.0
+        end = at + exd
+        if end > st.start:
+            tl.visibles.append(Visible(copy.copy(it), st.start, min(end, total), st.enter, st.enter_dur, ex, exd,
+                                       st.scale_segs, st.alpha_segs))
 
     def close_bgm(at: float) -> None:
         nonlocal bgm
@@ -185,19 +212,41 @@ def build_timeline(project: Project, parsed: ParsedScript, voices: dict[int, str
         at = st.start
         for c in st.scene.commands:
             if c.kind == "show":
-                if project.item(c.arg) is None:
-                    tl.warnings.append(f"フレーム{st.scene.index + 1}: 素材「{c.arg}」がありません")
+                it = project.item(c.name)
+                if it is None:
+                    tl.warnings.append(f"フレーム{st.scene.index + 1}: 素材「{c.name}」がありません")
                     continue
-                if c.arg not in open_items:
-                    open_items[c.arg] = at
-                    if c.arg in order:
-                        order.remove(c.arg)
-                    order.append(c.arg)
+                if c.name not in open_items:
+                    o = c.options()
+                    open_items[c.name] = _Open(at, o.get("motion", it.enter), o.get("dur", it.enter_dur),
+                                               1.0, it.opacity)
+                    if c.name in order:
+                        order.remove(c.name)
+                    order.append(c.name)
             elif c.kind == "hide":
-                close_item(c.arg, at)
+                o = c.options()
+                close_item(c.name, at, o.get("motion"), o.get("dur"))
             elif c.kind == "hideall":
                 for n in list(open_items):
                     close_item(n, at)
+            elif c.kind in ("scale", "alpha"):
+                ob = open_items.get(c.name)
+                if ob is None:
+                    tl.warnings.append(f"フレーム{st.scene.index + 1}: 「{c.name}」は表示されていないので変更できません")
+                    continue
+                o = c.options()
+                if "percent" not in o:
+                    tl.warnings.append(f"フレーム{st.scene.index + 1}: {c.raw} に % の値がありません")
+                    continue
+                dur = max(0.0, o.get("dur", 0.5))
+                if c.kind == "scale":
+                    target = max(0.0, o["percent"] / 100)
+                    ob.scale_segs.append((at, at + dur, ob.scale, target))
+                    ob.scale = target
+                else:
+                    target = min(1.0, max(0.0, 1 - o["percent"] / 100))
+                    ob.alpha_segs.append((at, at + dur, ob.alpha, target))
+                    ob.alpha = target
             elif c.kind == "bgm":
                 close_bgm(at)
                 p = project.resolve_audio("bgm", c.arg)
@@ -218,7 +267,7 @@ def build_timeline(project: Project, parsed: ParsedScript, voices: dict[int, str
         if st.scene.text:
             tl.subtitles.append((st.scene.text, st.start, min(st.end, total)))
     for n in list(open_items):
-        close_item(n, total)
+        close_item(n, total, final=True)
     close_bgm(total)
 
     # 表示の順番：z → 表示した順

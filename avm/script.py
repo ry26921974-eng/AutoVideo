@@ -30,7 +30,22 @@ CMD_ALIASES = {
     "se": "se", "ｓｅ": "se", "効果音": "se",
     "音声": "voice", "ボイス": "voice",
     "秒数": "dur", "時間": "dur", "待機": "dur",
+    "大きさ": "scale", "拡大": "scale", "サイズ": "scale", "拡大縮小": "scale",
+    "透明度": "alpha", "透過度": "alpha", "透過": "alpha",
 }
+
+# 登場・退場の言葉
+MOTION_WORDS = {
+    "左から": "left", "右から": "right", "上から": "top", "下から": "bottom",
+    "左へ": "left", "右へ": "right", "上へ": "top", "下へ": "bottom",
+    "フェード": "fade", "ふわっと": "fade", "ズーム": "zoom", "なし": "none",
+}
+MOTION_IN = {"left": "左から", "right": "右から", "top": "上から", "bottom": "下から", "fade": "フェード",
+             "zoom": "ズーム", "none": "なし"}
+MOTION_OUT = {"left": "左へ", "right": "右へ", "top": "上へ", "bottom": "下へ", "fade": "フェード",
+              "zoom": "ズーム", "none": "なし"}
+
+ARG_SPLIT_RE = re.compile(r"[,，、]")
 
 # 種類 → 書き出すときの表記
 CMD_LABELS = {
@@ -42,6 +57,8 @@ CMD_LABELS = {
     "se": "SE",
     "voice": "音声",
     "dur": "秒数",
+    "scale": "大きさ",
+    "alpha": "透明度",
 }
 
 
@@ -52,10 +69,42 @@ class Command:
     line_no: int
     raw: str
 
+    @property
+    def name(self) -> str:
+        """素材名（「ねこ,左から」の「ねこ」）。"""
+        return ARG_SPLIT_RE.split(self.arg)[0].strip()
+
+    @property
+    def opts(self) -> list[str]:
+        return [o.strip() for o in ARG_SPLIT_RE.split(self.arg)[1:] if o.strip()]
+
+    def options(self) -> dict:
+        """motion（動き）, dur（秒）, percent（%）を取り出す。"""
+        out: dict = {}
+        for o in self.opts:
+            o2 = o.replace(" ", "")
+            if o2 in MOTION_WORDS:
+                out["motion"] = MOTION_WORDS[o2]
+                continue
+            m = re.match(r"^([0-9.]+)\s*(秒|s|%|％)?$", o2)
+            if not m:
+                continue
+            try:
+                v = float(m.group(1))
+            except ValueError:
+                continue
+            unit = m.group(2) or ""
+            if unit in ("%", "％") or (not unit and self.kind in ("scale", "alpha") and "percent" not in out):
+                out["percent"] = v
+            else:
+                out["dur"] = v
+        return out
+
     def describe(self) -> str:
         names = {
             "show": "表示", "hide": "消去", "hideall": "全消去", "bgm": "BGM開始",
             "bgm_stop": "BGM停止", "se": "SE再生", "voice": "音声ファイル", "dur": "秒数",
+            "scale": "大きさ", "alpha": "透明度",
         }
         n = names.get(self.kind, self.kind)
         return f"{n}: {self.arg}" if self.arg else n
@@ -120,7 +169,7 @@ def parse_command(body: str, line_no: int, raw: str) -> Command | None:
         return None
     if kind == "bgm" and arg in ("停止", "止める", "stop", "オフ", "OFF", "off"):
         kind, arg = "bgm_stop", ""
-    if kind == "hide" and arg in ("", "全部", "すべて", "全て"):
+    if kind == "hide" and ARG_SPLIT_RE.split(arg)[0].strip() in ("", "全部", "すべて", "全て"):
         kind, arg = "hideall", ""
     return Command(kind, arg, line_no, raw)
 
@@ -216,10 +265,10 @@ def visible_at(parsed: ParsedScript, scene_index: int) -> list[str]:
     visible: list[str] = []
     for sc in parsed.scenes[: scene_index + 1]:
         for c in sc.commands:
-            if c.kind == "show" and c.arg and c.arg not in visible:
-                visible.append(c.arg)
-            elif c.kind == "hide" and c.arg in visible:
-                visible.remove(c.arg)
+            if c.kind == "show" and c.name and c.name not in visible:
+                visible.append(c.name)
+            elif c.kind == "hide" and c.name in visible:
+                visible.remove(c.name)
             elif c.kind == "hideall":
                 visible.clear()
     return visible
@@ -228,8 +277,8 @@ def visible_at(parsed: ParsedScript, scene_index: int) -> list[str]:
 def rename_in_script(script: str, old: str, new: str) -> str:
     def repl(m: re.Match) -> str:
         c = parse_command(m.group(1), 0, m.group(0))
-        if c and c.kind in ("show", "hide") and c.arg == old:
-            return format_command(c.kind, new)
+        if c and c.kind in ("show", "hide", "scale", "alpha") and c.name == old:
+            return format_command(c.kind, ",".join([new] + c.opts))
         return m.group(0)
 
     script = CMD_RE.sub(repl, script)
@@ -246,7 +295,7 @@ def rename_in_script(script: str, old: str, new: str) -> str:
 def remove_item_commands(script: str, name: str) -> str:
     def repl(m: re.Match) -> str:
         c = parse_command(m.group(1), 0, m.group(0))
-        if c and c.kind in ("show", "hide") and c.arg == name:
+        if c and c.kind in ("show", "hide", "scale", "alpha") and c.name == name:
             return ""
         return m.group(0)
 
